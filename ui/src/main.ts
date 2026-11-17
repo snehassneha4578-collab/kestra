@@ -14,15 +14,18 @@ import routes from "./routes/routes"
 import en from "./translations/en.json"
 import {setupTenantRouter, tenantGuard} from "./composables/useTenant"
 import * as BasicAuth from "./utils/basicAuth"
+import {isReauthOpen, requestReauth} from "./composables/useReauthDialog"
 import {getCsrfToken} from "./utils/csrf"
 import {useCoreStore} from "./stores/core"
 import {useLayoutStore} from "./stores/layout"
 import {useUnsavedChangesStore} from "./stores/unsavedChanges"
 import {useMiscStore} from "override/stores/misc"
+import {baseUrl} from "override/utils/route"
 import {TASK_ICON_INJECTION_KEY} from "@kestra-io/design-system"
 import TaskIcon from "./components/plugins/TaskIcon.vue"
 import {registerServiceWorker} from "./utils/serviceWorker"
 import {initPwaInstallCapture} from "./utils/pwaInstallState"
+import {storageKeys} from "./utils/constants"
 
 void registerServiceWorker()
 initPwaInstallCapture()
@@ -47,6 +50,8 @@ const handleAuthError = (to: {fullPath: string}, error: unknown) => {
 let httpClient: ReturnType<typeof setupKestraHttp> | undefined
 
 function setupAxios(router: Router) {
+    if (httpClient) return useClient()
+
     const coreStore = useCoreStore()
     const unsavedChangesStore = useUnsavedChangesStore()
     const layoutStore = useLayoutStore()
@@ -59,11 +64,32 @@ function setupAxios(router: Router) {
     }
 
 
-    httpClient = setupKestraHttp({}, {
+    httpClient = setupKestraHttp({baseUrl}, {
         coreStore,
         router,
         beforeLogout,
         isLoggedIn: () => !!BasicAuth.isLoggedIn(),
+        onUnauthorized: async (navigateToLogin, error) => {
+            const isLoginRequest = Boolean(error.config?.url?.endsWith("/login"))
+            if (isLoginRequest && isReauthOpen()) return false
+
+            if (isLoginRequest || router.currentRoute.value.meta.anonymous) {
+                beforeLogout()
+                navigateToLogin()
+                return false
+            }
+
+            const reauthenticated = await requestReauth({
+                signIn: BasicAuth.signIn,
+                confirm: async () => {
+                    if (!BasicAuth.isLoggedIn()) throw new Error("The basic-auth session is not back yet.")
+                },
+            })
+            if (reauthenticated) return true
+            beforeLogout()
+            navigateToLogin()
+            return false
+        },
     })
 
     // Add CSRF token to every request - covers both generated-endpoint calls and
@@ -129,7 +155,7 @@ async function beforeResolve(router: Router, to: RouteLocationNormalized, from: 
         }
 
         // Check if basic auth setup is still in progress
-        const isSetupInProgress = localStorage.getItem("basicAuthSetupInProgress")
+        const isSetupInProgress = localStorage.getItem(storageKeys.BASIC_AUTH_SETUP_IN_PROGRESS)
         if (isSetupInProgress === "true") {
             return {name: "setup"}
         }
@@ -147,8 +173,6 @@ initApp(app, routes, null, en as Record<string, unknown>, {}, {
     beforeResolve,
 }).then(({router, piniaStore}) => {
     setupTenantRouter(router, app)
-
-    setupAxios(router)
 
     const $http = setupAxios(router)
 

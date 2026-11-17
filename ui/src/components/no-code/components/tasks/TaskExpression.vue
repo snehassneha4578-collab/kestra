@@ -1,33 +1,42 @@
 <template>
     <KsEditor
+        ref="editorRef"
         v-bind="editorBindings"
         :modelValue="localEditorValue"
         :navbar="false"
         :options="{fullHeight: false, largeSuggestions: false}"
         :inline="true"
+        :readOnly="disabled"
         lang="yaml"
         :placeholder="$t('no_code.expression_placeholder', {field: root || 'value'})"
         @update:model-value="editorInput"
+        @focus="onFocus"
     />
 </template>
 
 <script setup lang="ts">
     import {collapseEmptyValues} from "./MixinTask"
-    import {KsEditor} from "@kestra-io/design-system"
+    import {KsEditor, type KsEditorExposes} from "@kestra-io/design-system"
     import * as YAML_UTILS from "@kestra-io/topology/flow-yaml-utils"
     import {useEditorBindings} from "../../../../composables/useEditorBindings"
-    import {computed, ref} from "vue"
+    import {useFocusedExpressionEditor} from "./useFocusedExpressionEditor"
+    import {computed, ref, type PropType} from "vue"
 
     const editorBindings = useEditorBindings()
+    const editorRef = ref<KsEditorExposes>()
+    const {onFocus} = useFocusedExpressionEditor(editorRef)
 
     const props = defineProps({
         modelValue: {
-            type: [String, Object],
-            default: undefined,
+            type: [String, Object] as PropType<unknown>,
         },
         root: {
             type: String,
             default: undefined,
+        },
+        disabled: {
+            type: Boolean,
+            default: false,
         },
     })
 
@@ -37,7 +46,7 @@
     }
     const emit = defineEmits(["update:modelValue"])
 
-    function onInput(value: any) {
+    function onInput(value: unknown) {
         emit("update:modelValue", collapseEmptyValues(value))
     }
 

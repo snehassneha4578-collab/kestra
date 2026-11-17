@@ -35,11 +35,16 @@ import {
 } from "./subflowLinkProvider"
 import {
     filterMissingRequiredTaskProperties,
+    mergeDuplicatePropertySuggestions,
     scopePropertySuggestionsToTaskType,
     taskIdentityAtCursor,
 } from "./taskCompletionScoping"
 import {splitPluginTypeLabel} from "./pluginTypeCompletionLabel"
+import {registerIndentedBlockScalarTokenizer} from "./yamlBlockScalarTokenizer"
+import {registerPebbleDefinitionProvider} from "./pebbleDefinitionProvider"
+import {registerPebbleHoverProvider, registerPebbleHoverToggle} from "./pebbleHoverProvider"
 import type {IPosition, IDisposable, CancellationToken} from "monaco-editor/editor/editor.api"
+import {storageKeys} from "../../../utils/constants"
 import IModel = monaco.editor.IModel;
 import ProviderResult = monaco.languages.ProviderResult;
 import CompletionList = monaco.languages.CompletionList;
@@ -66,11 +71,14 @@ export class YamlLanguageConfigurator extends AbstractLanguageConfigurator {
         // Base YAML language setup shared across all YAML editors.
         const monacoYaml = configureMonacoYaml(monaco, {
             enableSchemaRequest: true,
-            hover: localStorage.getItem("hoverTextEditor") === "true",
+            hover: localStorage.getItem(storageKeys.HOVER_TEXT_EDITOR) === "true",
             completion: true,
             validate: validateYAML.value ?? true,
             schemas: yamlSchemas(),
         })
+
+        // Keep multi-line string content highlighted as plain text, whatever its indentation.
+        void registerIndentedBlockScalarTokenizer("yaml")
 
         // Keep Monaco YAML validation in sync with the blueprint store setting. The single instance must be
         // updated in place: calling configureMonacoYaml again would stack a second undisposed instance whose
@@ -320,20 +328,20 @@ export class YamlLanguageConfigurator extends AbstractLanguageConfigurator {
                     return suggestion
                 })
 
-            // Monaco YAML derives property suggestions from the union of every task type, so a task
-            // body offers keys from unrelated plugins. Restrict them to the task's resolved `type`.
-            let scopedSuggestions = suggestions
+            let scopedSuggestions = mergeDuplicatePropertySuggestions({
+                suggestions,
+                propertyKind: monaco.languages.CompletionItemKind.Property,
+            })
             if (!isTypeValueContext) {
                 const task = taskIdentityAtCursor({
                     source: model.getValue(),
                     cursorIndex: model.getOffsetAt(position),
                 })
-                // Monaco YAML requests the union of every plugin property for a bare task.
-                // Re-scoping hits the backend to fetch the specific plugin's properties, but
-                // the flow root has other id+type lists that are task-shaped (e.g. sla:).
+                // The flow schema describes a single version of each plugin, so a task pinning a
+                // `version` is scoped against that version's documentation instead.
                 // Guard on dotted FQCNs to skip 404s for enum types like MAX_DURATION.
                 const isPluginType = task?.type.includes(".")
-                const scopeKey = task && isPluginType ? `${task.type}@${task.version ?? ""}` : undefined
+                const scopeKey = task?.version && isPluginType ? `${task.type}@${task.version}` : undefined
                 if (task && scopeKey && !unscopableTaskTypes.has(scopeKey)) {
                     try {
                         // `all` is required: without it the endpoint omits every inherited `Task`
@@ -346,7 +354,7 @@ export class YamlLanguageConfigurator extends AbstractLanguageConfigurator {
                         })
                         const properties = pluginDoc?.schema?.properties?.properties
                         scopedSuggestions = scopePropertySuggestionsToTaskType({
-                            suggestions,
+                            suggestions: scopedSuggestions,
                             validPropertyKeys: properties ? Object.keys(properties) : undefined,
                             propertyKind: monaco.languages.CompletionItemKind.Property,
                         })
@@ -614,6 +622,15 @@ export class YamlLanguageConfigurator extends AbstractLanguageConfigurator {
         )
 
         this.registerSubflowLinks(autoCompletionProviders)
+        const pluginsStore = usePluginsStore()
+        const loadOutputProperties = async (cls: string) =>
+            (await pluginsStore.load({cls, commit: false}))?.schema?.outputs?.properties
+        registerPebbleDefinitionProvider(autoCompletionProviders, loadOutputProperties)
+        registerPebbleHoverProvider(autoCompletionProviders, loadOutputProperties)
+        const toast = makeToast(t)
+        registerPebbleHoverToggle(autoCompletionProviders, t("pebble_hover.toggle"), (enabled) =>
+            toast.success(t(enabled ? "pebble_hover.enabled" : "pebble_hover.disabled")),
+        )
         this.registerEditionProviders(autoCompletionProviders, t)
 
         return autoCompletionProviders

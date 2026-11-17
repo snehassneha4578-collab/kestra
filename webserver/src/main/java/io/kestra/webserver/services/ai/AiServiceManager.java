@@ -16,7 +16,6 @@ import io.kestra.webserver.services.ai.gemini.GeminiAiService;
 import io.kestra.webserver.services.ai.gemini.GeminiConfiguration;
 import io.kestra.webserver.services.posthog.PosthogService;
 
-import io.micronaut.context.annotation.Requires;
 import io.micronaut.context.env.Environment;
 import io.micronaut.context.env.PropertyPlaceholderResolver;
 import io.micronaut.core.annotation.Nullable;
@@ -28,7 +27,7 @@ import lombok.extern.slf4j.Slf4j;
 
 @Singleton
 @Slf4j
-@Requires(property = "kestra.ai.enabled", value = "true", defaultValue = "true")
+@RequiresAiEnabled
 public class AiServiceManager {
     private final Map<String, AiServiceInterface> aiServices = new HashMap<>();
     private final AiProvidersConfiguration providersConfiguration;
@@ -103,7 +102,7 @@ public class AiServiceManager {
                 log.warn("AI service for provider '{}' could not be created, skipping.", provider.id());
                 continue;
             }
-            if (provider.isDefault()) {
+            if (provider.isDefaultProvider()) {
                 defaultProviderId = provider.id();
             }
             aiServices.put(provider.id(), aiService);
@@ -168,7 +167,7 @@ public class AiServiceManager {
     public AiServiceInterface getDefaultAiService() {
         if (providersConfiguration.providers() != null) {
             for (AiProviderConfiguration provider : providersConfiguration.providers()) {
-                if (provider.isDefault()) {
+                if (provider.isDefaultProvider()) {
                     return aiServices.get(provider.id());
                 }
             }
@@ -210,7 +209,7 @@ public class AiServiceManager {
             provider.id(),
             provider.displayName(),
             provider.type(),
-            provider.isDefault(),
+            provider.isDefaultProvider(),
             configuration,
             provider.systemPrompt()
         );
